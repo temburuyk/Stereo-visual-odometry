@@ -1,5 +1,5 @@
 import numpy as np
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 import cv2
 import sys
 from scipy.optimize import least_squares
@@ -7,6 +7,7 @@ import os
 import inlierDetector
 from helperFunctions import genEulerZXZMatrix, minimizeReprojection, generate3DPoints
 from utils import saveDebugImg
+import time
 
 if __name__ == "__main__":
 
@@ -21,7 +22,7 @@ if __name__ == "__main__":
     except:
         useSIFT = False
         useRansac = False
-        showLiveTrajectory = False
+        showLiveTrajectory = True #False
 
     plotTrajectory = True
     outputDebug = False
@@ -62,6 +63,13 @@ if __name__ == "__main__":
     traj = np.zeros((canvasH,canvasW,3), dtype=np.uint8)
 
     for frm in range(startFrame+1, endFrame+1):
+
+        t = time.localtime()
+        current_time = time.strftime("%H:%M:%S", t)
+        print(current_time)
+
+        print(frm)
+        print(" frame number ") 
 
         # reuse T-1 data instead of reading again-again
         # same with feature computation - anything that can be reused
@@ -352,9 +360,9 @@ if __name__ == "__main__":
             cv2.putText(traj, text, (20,40), cv2.FONT_HERSHEY_PLAIN, 1, (255,255,255), 1, 8)
             cv2.circle(traj, (draw_x, draw_y), 1, (frm*255/(endFrame-startFrame),255-frm*255/(endFrame-startFrame),0), 1)
 
-            if showLiveTrajectory:
-                cv2.imshow('Trajectory', traj)
-                cv2.waitKey(1)
+            #if showLiveTrajectory:
+                #cv2.imshow('Trajectory', traj)
+                #cv2.waitKey(1)
 
             if frm % 100 == 0:
                 cv2.imwrite('mapClique.png', traj)
