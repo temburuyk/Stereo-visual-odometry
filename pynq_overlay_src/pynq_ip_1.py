@@ -55,3 +55,7 @@ print(A_buffer)
 print(B_buffer)
 print(C_buffer)
 
+xlnk.cma_free(A_buffer)
+xlnk.cma_free(B_buffer)
+xlnk.cma_free(C_buffer)
+
