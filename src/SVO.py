@@ -1,3 +1,5 @@
+from pynq import Overlay
+from pynq import Xlnk
 import numpy as np
 #from matplotlib import pyplot as plt
 import cv2
@@ -8,6 +10,19 @@ import inlierDetector
 from helperFunctions import genEulerZXZMatrix, minimizeReprojection, generate3DPoints
 from utils import saveDebugImg
 import time
+import struct
+
+IMG_WIDTH         =640
+IMG_HEIGHT        =480
+FILTER_SIZE     =9
+FILTER_OFFS     =(int)(FILTER_SIZE/2)
+SECTIONS        =5
+SECTION_HEIGHT  =(int)((IMG_HEIGHT-2*FILTER_OFFS)/SECTIONS)
+DISP_IMG_HEIGHT =SECTIONS*SECTION_HEIGHT
+BYTES_PER_PIXEL =1
+TOTAL_BYTES     =DISP_IMG_HEIGHT*IMG_WIDTH*BYTES_PER_PIXEL
+ADDRESS_OFFSET  =int(TOTAL_BYTES/SECTIONS)
+image_size = int(IMG_WIDTH*IMG_HEIGHT)
 
 if __name__ == "__main__":
 
@@ -26,6 +41,42 @@ if __name__ == "__main__":
 
     plotTrajectory = True
     outputDebug = False
+
+    #Initializing the overlay to compute disparity in FPGA 
+    overlay = Overlay('../MGM_Bitstream/design_1.bit')
+    overlay
+    SGM_GreyCost_0 = overlay.SGM_GreyCost_0
+    SGM_GreyCost_1 = overlay.SGM_GreyCost_1
+    SGM_GreyCost_2 = overlay.SGM_GreyCost_2
+    SGM_GreyCost_3 = overlay.SGM_GreyCost_3
+    SGM_GreyCost_4 = overlay.SGM_GreyCost_4
+
+    #sgm offsets
+    inL_offs = SGM_GreyCost_0.register_map.inL.address
+    inR_offs = SGM_GreyCost_0.register_map.inR.address
+    outD_offs = SGM_GreyCost_0.register_map.outD.address
+    CTRL_reg_offset = SGM_GreyCost_0.register_map.CTRL.address
+
+    xlnk = Xlnk()
+    Image_buf =  xlnk.cma_alloc(0x0500000, data_type = "unsigned char")
+    Image_buf_phy_addr = xlnk.cma_get_phy_addr(Image_buf)
+
+    SGM_GreyCost_0.write(inL_offs,Image_buf_phy_addr+0*image_size)
+    SGM_GreyCost_0.write(inR_offs,Image_buf_phy_addr+1*image_size)
+    SGM_GreyCost_0.write(outD_offs,Image_buf_phy_addr+2*image_size)
+    SGM_GreyCost_1.write(inL_offs,Image_buf_phy_addr+0*image_size + ADDRESS_OFFSET)
+    SGM_GreyCost_1.write(inR_offs,Image_buf_phy_addr+1*image_size + ADDRESS_OFFSET)
+    SGM_GreyCost_1.write(outD_offs,Image_buf_phy_addr+2*image_size + ADDRESS_OFFSET)
+    SGM_GreyCost_2.write(inL_offs,Image_buf_phy_addr+0*image_size + 2*ADDRESS_OFFSET)
+    SGM_GreyCost_2.write(inR_offs,Image_buf_phy_addr+1*image_size + 2*ADDRESS_OFFSET)
+    SGM_GreyCost_2.write(outD_offs,Image_buf_phy_addr+2*image_size + 2*ADDRESS_OFFSET)
+    SGM_GreyCost_3.write(inL_offs,Image_buf_phy_addr+0*image_size + 3*ADDRESS_OFFSET)
+    SGM_GreyCost_3.write(inR_offs,Image_buf_phy_addr+1*image_size + 3*ADDRESS_OFFSET)
+    SGM_GreyCost_3.write(outD_offs,Image_buf_phy_addr+2*image_size + 3*ADDRESS_OFFSET)
+    SGM_GreyCost_4.write(inL_offs,Image_buf_phy_addr+0*image_size + 4*ADDRESS_OFFSET)
+    SGM_GreyCost_4.write(inR_offs,Image_buf_phy_addr+1*image_size + 4*ADDRESS_OFFSET)
+    SGM_GreyCost_4.write(outD_offs,Image_buf_phy_addr+2*image_size + 4*ADDRESS_OFFSET)
+
     print ('SIFT:', useSIFT, 'ransac:', useRansac, 'showTrajectory:', showLiveTrajectory)
 
     datapath = '../Data/' + '{0:02d}'.format(sequence)
@@ -74,29 +125,86 @@ if __name__ == "__main__":
         # reuse T-1 data instead of reading again-again
         # same with feature computation - anything that can be reused
         imgPath = leftImagePath + '{0:06d}'.format(frm-1) + '.png';
-        ImT1_L = cv2.imread(imgPath, 0)    #0 flag returns a grayscale image
+        ImT1_L_raw = cv2.imread(imgPath, 0)    #0 flag returns a grayscale image
+        ImT1_L = cv2.resize(ImT1_L_raw,(640,480));
 
         imgPath = rightImagePath + '{0:06d}'.format(frm-1) + '.png';
-        ImT1_R = cv2.imread(imgPath, 0)
+        ImT1_R_raw = cv2.imread(imgPath, 0)
+        ImT1_R = cv2.resize(ImT1_R_raw,(640,480));
 
         imgPath = leftImagePath + '{0:06d}'.format(frm) + '.png';
-        ImT2_L = cv2.imread(imgPath, 0)
+        ImT2_L_raw = cv2.imread(imgPath, 0)
+        ImT2_L = cv2.resize(ImT2_L_raw,(640,480));
 
         imgPath = rightImagePath + '{0:06d}'.format(frm) + '.png';
-        ImT2_R = cv2.imread(imgPath, 0)
+        ImT2_R_raw = cv2.imread(imgPath, 0)
+        ImT2_R = cv2.resize(ImT2_R_raw,(640,480));
 
-        block = 11
-        #emperical values from P1, P2 as suggested in Ocv documentation
-        P1 = block * block * 8
-        P2 = block * block * 32
+        Disp_time1 = time.time()
+        #Transferring the T1 Image data to FPGA
+        test1 = ImT1_L.flatten()
+        test2 = ImT1_R.flatten()
+        Image_buf[0:image_size] = test1[0:image_size]                       #left raw image
+        Image_buf[image_size:image_size*2] = test2[0:image_size]            #right raw image
 
-        disparityEngine = cv2.StereoSGBM_create(minDisparity=0,numDisparities=32, blockSize=block, P1=P1, P2=P2)
-        ImT1_disparity = disparityEngine.compute(ImT1_L, ImT1_R).astype(np.float32)
-        #cv2.imwrite('disparity.png', ImT1_disparity)
-        ImT1_disparityA = np.divide(ImT1_disparity, 16.0)
+        SGM_GreyCost_0.write(outD_offs,Image_buf_phy_addr+2*image_size + 0*ADDRESS_OFFSET)
+        SGM_GreyCost_1.write(outD_offs,Image_buf_phy_addr+2*image_size + 1*ADDRESS_OFFSET)
+        SGM_GreyCost_2.write(outD_offs,Image_buf_phy_addr+2*image_size + 2*ADDRESS_OFFSET)
+        SGM_GreyCost_3.write(outD_offs,Image_buf_phy_addr+2*image_size + 3*ADDRESS_OFFSET)
+        SGM_GreyCost_4.write(outD_offs,Image_buf_phy_addr+2*image_size + 4*ADDRESS_OFFSET)
 
-        ImT2_disparity = disparityEngine.compute(ImT2_L, ImT2_R).astype(np.float32)
-        ImT2_disparityA = np.divide(ImT2_disparity, 16.0)
+        #Start the Peripherals
+        SGM_GreyCost_4.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_3.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_2.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_1.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_0.write(CTRL_reg_offset,0b00000001)
+
+        MGM_Done = False
+        while(not(MGM_Done)):
+            MGM_Done = MGM_Done or SGM_GreyCost_0.register_map.CTRL.AP_DONE
+
+        Disp_time = time.time() - Disp_time1 
+        print("Disp compute time 4",Disp_time)
+
+        #Transferring the T2 Image data to FPGA
+        test1 = ImT2_L.flatten()
+        test2 = ImT2_R.flatten()
+        Image_buf[0:image_size] = test1[0:image_size]                       #left raw image
+        Image_buf[image_size:image_size*2] = test2[0:image_size]            #right raw image
+
+        SGM_GreyCost_0.write(outD_offs,Image_buf_phy_addr+3*image_size + 0*ADDRESS_OFFSET)
+        SGM_GreyCost_1.write(outD_offs,Image_buf_phy_addr+3*image_size + 1*ADDRESS_OFFSET)
+        SGM_GreyCost_2.write(outD_offs,Image_buf_phy_addr+3*image_size + 2*ADDRESS_OFFSET)
+        SGM_GreyCost_3.write(outD_offs,Image_buf_phy_addr+3*image_size + 3*ADDRESS_OFFSET)
+        SGM_GreyCost_4.write(outD_offs,Image_buf_phy_addr+3*image_size + 4*ADDRESS_OFFSET)
+
+        #Start the Peripherals
+        SGM_GreyCost_4.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_3.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_2.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_1.write(CTRL_reg_offset,0b00000001)
+        SGM_GreyCost_0.write(CTRL_reg_offset,0b00000001)
+
+        Disp_time = time.time() - Disp_time1
+        print("Disp compute time 3",Disp_time)
+
+        MGM_Done = False
+        while(not(MGM_Done)):
+            MGM_Done = MGM_Done or SGM_GreyCost_0.register_map.CTRL.AP_DONE
+
+        Disp_time = time.time() - Disp_time1 
+        print("Disp compute time 2",Disp_time)
+
+        ImT1_disparityA = np.zeros((IMG_HEIGHT,IMG_WIDTH),dtype=np.ubyte)
+        ImT2_disparityA = np.zeros((IMG_HEIGHT,IMG_WIDTH),dtype=np.ubyte)
+        for i in range(IMG_HEIGHT):
+            for j in range(IMG_WIDTH):
+                    ImT1_disparityA[i][j] = (Image_buf[2*image_size+i*IMG_WIDTH+j])#/16.0
+                    ImT2_disparityA[i][j] = (Image_buf[3*image_size+i*IMG_WIDTH+j])#/16.0
+
+        Disp_time = time.time() - Disp_time1 
+        print("Disp compute time",Disp_time)
 
         if outputDebug:
             fname = 'debugImgs/diparity_' + str(frm) + '.png'
